@@ -4,6 +4,20 @@ local logger = require("logger")
 local function yes() return true end
 local function no() return false end
 
+local function isRemarkable2()
+    local model = "unknown"
+    local f = io.open("/sys/devices/soc0/machine")
+    if f then
+        model = f:read("*line")
+        f:close()
+        return model == "reMarkable 2.0", model
+    else
+        return false, model
+    end
+end
+
+local isRM2, machine = isRemarkable2()
+
 local Remarkable = Generic:new{
     isRemarkable = yes,
     model = "reMarkable",
@@ -58,12 +72,28 @@ local wacom_width = 15725 -- unscaled_size_check: ignore
 local wacom_height = 20967 -- unscaled_size_check: ignore
 local wacom_scale_x = screen_width / wacom_width
 local wacom_scale_y = screen_height / wacom_height
-local TimeVal = require('ui/timeval')
+local mt_width = isRM2 and 1403 or 767 -- unscaled_size_check: ignore
+local mt_height = isRM2 and 1871 or 1023 -- unscaled_size_check: ignore
+local mt_scale_x = screen_width / mt_width
+local mt_scale_y = screen_height / mt_height
 
-local adjustAbsEvt = function(self, ev)
-    -- for the rm2
-    ev.time = TimeVal:now()
+local adjustTouchEvt = function(self, ev)
+    if isRM2 then
+        ev.time = require('ui/timeval'):now()
+    end
     if ev.type == EV_ABS then
+        -- scale up both X & Y as touch input is different res from display
+        if ev.code == ABS_MT_POSITION_X then
+            if isRM2 then
+                ev.value = ev.value * mt_scale_x
+            else
+                -- the original reMarkable has mirrored X axis too
+                ev.value = (mt_width - ev.value) * mt_scale_x
+            end
+        end
+        if ev.code == ABS_MT_POSITION_Y then
+            ev.value = (mt_height - ev.value) * mt_scale_y
+        end
         -- The Wacom input layer is non-multi-touch and
         -- uses its own scaling factor.
         -- The X and Y coordinates are swapped, and the (real) Y
@@ -77,7 +107,6 @@ local adjustAbsEvt = function(self, ev)
         end
     end
 end
-
 
 function Remarkable:init()
     self.screen = require("ffi/framebuffer_mxcfb"):new{device = self, debug = logger.dbg}
@@ -94,18 +123,7 @@ function Remarkable:init()
     self.input.open(self.input_wacom) -- Wacom
     self.input.open(self.input_ts) -- Touchscreen
     self.input.open(self.input_buttons) -- Buttons
-
-    self.input:registerEventAdjustHook(adjustAbsEvt)
-
-    if self.invertX() then
-        self.input:registerEventAdjustHook(self.input.adjustTouchMirrorX, self.mt_width)
-    end
-
-    local mt_scale_x = self.mt_width / screen_width
-    local mt_scale_y = self.mt_height / screen_height
-
-    self.input:registerEventAdjustHook(self.input.adjustTouchMirrorY, self.mt_height)
-    self.input:registerEventAdjustHook(self.input.adjustTouchScale, {x=mt_scale_x, y=mt_scale_y})
+    self.input:registerEventAdjustHook(adjustTouchEvt)
 
     -- USB plug/unplug, battery charge/not charging are generated as fake events
     self.input.open("fake_events")
@@ -153,17 +171,12 @@ function Remarkable:reboot()
     os.execute("systemctl reboot")
 end
 
-local f = io.open("/sys/devices/soc0/machine")
-if not f then error("missing sysfs entry for a remarkable") end
-
-local deviceType = f:read("*all") 
-if deviceType == "reMarkable 2.0\n" then
-    logger.info("rm2 ", deviceType)
+logger.info("machine", machine)
+if isRM2 then
     if not os.getenv("RM2FB_SHIM") then
         error("reMarkable2 requires RM2FB to work")
     end
-
     return Remarkable2
-else 
+else
     return Remarkable1
 end
