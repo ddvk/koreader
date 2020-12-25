@@ -26,7 +26,7 @@ local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
-local ImageWidget = require("ui/widget/imagewidget")
+local IconWidget = require("ui/widget/iconwidget")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local MovableContainer = require("ui/widget/container/movablecontainer")
 local Size = require("ui/size")
@@ -79,9 +79,8 @@ function MultiConfirmBox:init()
     end
     local content = HorizontalGroup:new{
         align = "center",
-        ImageWidget:new{
-            file = "resources/info-i.png",
-            scale_for_dpi = true,
+        IconWidget:new{
+            icon = "notice-question",
         },
         HorizontalSpan:new{ width = Size.span.horizontal_default },
         TextBoxWidget:new{
@@ -134,6 +133,7 @@ function MultiConfirmBox:init()
             FrameContainer:new{
                 background = Blitbuffer.COLOR_WHITE,
                 margin = self.margin,
+                radius = Size.radius.window,
                 padding = self.padding,
                 padding_bottom = 0, -- no padding below buttontable
                 VerticalGroup:new{

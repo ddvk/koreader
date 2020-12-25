@@ -4,7 +4,7 @@ ImageWidget shows an image from a file or memory
 Show image from file example:
 
         UIManager:show(ImageWidget:new{
-            file = "resources/info-i.png",
+            file = "resources/koreader.png",
             -- Make sure alpha is set to true if png has transparent background
             -- alpha = true,
         })
@@ -29,7 +29,6 @@ local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
 local Widget = require("ui/widget/widget")
 local logger = require("logger")
-local util  = require("util")
 
 -- DPI_SCALE can't change without a restart, so let's compute it now
 local function get_dpi_scale()
@@ -80,6 +79,7 @@ local ImageWidget = Widget:new{
     invert = nil,
     dim = nil,
     alpha = false, -- honors alpha values from the image
+    is_icon = false, -- set to true by sub-class IconWidget
 
     -- When rotation_angle is not 0, native image is rotated by this angle
     -- before scaling.
@@ -127,29 +127,7 @@ function ImageWidget:_loadimage()
     self._bb_disposable = self.image_disposable
 end
 
-local ICONS_ALT_SVG_DIR = false
--- Uncomment to use SVG icons from one of these directories
--- ICONS_ALT_SVG_DIR = "resources/icons/src/"
--- ICONS_ALT_SVG_DIR = "resources/icons/svg/"
-
 function ImageWidget:_loadfile()
-    if ICONS_ALT_SVG_DIR then
-        -- Pick the SVG version if one exists when a png icon file path is provided
-        local dir, name = self.file:match("^(resources/icons/)([^/]*).png$")
-        if dir and name then
-            local svg_file = ICONS_ALT_SVG_DIR .. name .. ".svg"
-            if lfs.attributes(svg_file, "mode") ~= "file" then
-                svg_file = svg_file:gsub(".large", "") -- Try with this removed
-                if lfs.attributes(svg_file, "mode") ~= "file" then
-                    svg_file = nil -- no alt svg available
-                end
-            end
-            if svg_file then
-                logger.dbg("using alt SVG", svg_file)
-                self.file = svg_file
-            end
-        end
-    end
     local itype = string.lower(string.match(self.file, ".+%.([^.]+)") or "")
     if itype == "svg" or itype == "png" or itype == "jpg" or itype == "jpeg"
             or itype == "gif" or itype == "tiff" or itype == "tif" then
@@ -178,6 +156,7 @@ function ImageWidget:_loadfile()
             -- hit cache
             self._bb = cache.bb
             self._bb_disposable = false -- don't touch or free a cached _bb
+            self._is_straight_alpha = cache.is_straight_alpha
         else
             if itype == "svg" then
                 local zoom
@@ -188,9 +167,10 @@ function ImageWidget:_loadfile()
                     width = self.width
                     height = self.height
                 end
-                -- local start_ts = require("ffi/util").getTimestamp() -- Uncomment for timing things
-                self._bb = RenderImage:renderSVGImageFile(self.file, width, height, zoom)
-                -- logger.info(string.format("  SVG rendering %.6f s", require("ffi/util").getDuration(start_ts)), self.file, zoom or "", width, height)
+                -- If NanoSVG is used by renderSVGImageFile, we'll get self._is_straight_alpha=true,
+                -- and paintTo() must use alphablitFrom() instead of pmulalphablitFrom() (which is
+                -- fine for everything MuPDF renders out)
+                self._bb, self._is_straight_alpha = RenderImage:renderSVGImageFile(self.file, width, height, zoom)
             else
                 self._bb = RenderImage:renderImageFile(self.file, false, width, height)
                 if scale_for_dpi_here then
@@ -198,14 +178,56 @@ function ImageWidget:_loadfile()
                     self._bb = RenderImage:scaleBlitBuffer(self._bb, math.floor(bb_w * DPI_SCALE), math.floor(bb_h * DPI_SCALE))
                 end
             end
+
+            -- Now, if that was *also* one of our icons, and it has an alpha channel,
+            -- compose it against a background-colored BB now, and cache *that*.
+            -- This helps us avoid repeating alpha-blending steps down the line,
+            -- and also ensures icon highlights/unhilights behave sensibly.
+            if self.is_icon then
+                local bbtype = self._bb:getType()
+                if bbtype == Blitbuffer.TYPE_BB8A or bbtype == Blitbuffer.TYPE_BBRGB32 then
+                    local icon_bb = Blitbuffer.new(self._bb.w, self._bb.h, Screen.bb:getType())
+                    --- @note: Should match the background color. Which is currently hard-coded as white ;).
+                    ---        See the note below in paintTo for how to make the dim flag behave in case
+                    ---        this no longer actually is white ;).
+                    icon_bb:fill(Blitbuffer.COLOR_WHITE)
+
+                    -- And now simply compose the icon on top of that, with dithering if necessary
+                    -- Remembering that NanoSVG feeds us straight alpha, unlike MµPDF
+                    if self._is_straight_alpha then
+                        if Screen.sw_dithering then
+                            icon_bb:ditheralphablitFrom(self._bb, 0, 0, 0, 0, icon_bb.w, icon_bb.h)
+                        else
+                            icon_bb:alphablitFrom(self._bb, 0, 0, 0, 0, icon_bb.w, icon_bb.h)
+                        end
+                    else
+                        if Screen.sw_dithering then
+                            icon_bb:ditherpmulalphablitFrom(self._bb, 0, 0, 0, 0, icon_bb.w, icon_bb.h)
+                        else
+                            icon_bb:pmulalphablitFrom(self._bb, 0, 0, 0, 0, icon_bb.w, icon_bb.h)
+                        end
+                    end
+
+                    -- Free the original icon w/ an alpha-channel, keep the flattened one
+                    self._bb:free()
+                    self._bb = icon_bb
+
+                    -- There's no longer an alpha channel ;)
+                    self._is_straight_alpha = nil
+                end
+            end
+
             if not self.file_do_cache then
                 self._bb_disposable = true -- we made it, we can modify and free it
             else
                 self._bb_disposable = false -- don't touch or free a cached _bb
                 -- cache this image
                 logger.dbg("cache", hash)
-                cache = ImageCacheItem:new{ bb = self._bb }
-                cache.size = cache.bb.stride * cache.bb.h
+                cache = ImageCacheItem:new{
+                    bb = self._bb,
+                    is_straight_alpha = self._is_straight_alpha,
+                }
+                cache.size = tonumber(cache.bb.stride) * cache.bb.h
                 ImageCache:insert(hash, cache)
             end
         end
@@ -392,27 +414,35 @@ function ImageWidget:paintTo(bb, x, y)
         h = size.h
     }
     logger.dbg("blitFrom", x, y, self._offset_x, self._offset_y, size.w, size.h)
-    -- Figure out if we're trying to render one of our own icons...
-    local is_icon = self.file and util.stringStartsWith(self.file, "resources/")
+    local do_alpha = false
     if self.alpha == true then
         -- Only actually try to alpha-blend if the image really has an alpha channel...
         local bbtype = self._bb:getType()
         if bbtype == Blitbuffer.TYPE_BB8A or bbtype == Blitbuffer.TYPE_BBRGB32 then
-            -- NOTE: MuPDF feeds us premultiplied alpha (and we don't care w/ GifLib, as alpha is all or nothing).
-            if Screen.sw_dithering and not is_icon then
+            do_alpha = true
+        end
+    end
+    if do_alpha then
+        --- @note: MuPDF feeds us premultiplied alpha (and we don't care w/ GifLib, as alpha is all or nothing),
+        ---        while NanoSVG feeds us straight alpha.
+        ---        SVG icons are currently flattened at caching time, so we'll only go through the straight alpha
+        ---        codepath for non-icons SVGs.
+        if self._is_straight_alpha then
+            --- @note: Our icons are already dithered properly, either at encoding time, or at caching time.
+            if Screen.sw_dithering and not self.is_icon then
+                bb:ditheralphablitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
+            else
+                bb:alphablitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
+            end
+        else
+            if Screen.sw_dithering and not self.is_icon then
                 bb:ditherpmulalphablitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
             else
                 bb:pmulalphablitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
             end
-        else
-            if Screen.sw_dithering and not is_icon then
-                bb:ditherblitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
-            else
-                bb:blitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
-            end
         end
     else
-        if Screen.sw_dithering and not is_icon then
+        if Screen.sw_dithering and not self.is_icon then
             bb:ditherblitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
         else
             bb:blitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
@@ -421,14 +451,28 @@ function ImageWidget:paintTo(bb, x, y)
     if self.invert then
         bb:invertRect(x, y, size.w, size.h)
     end
+    --- @note: This is mainly geared at black icons/text on a *white* background,
+    ---        otherwise the background color itself will shift.
+    ---        i.e., this actually *lightens* the rectangle, but since it's aimed at black,
+    ---        it makes it gray, dimmer; hence the name.
+    ---        TL;DR: If we one day want that to work for icons on a non-white background,
+    ---        a better solution would probably be to take the icon pixmap as an alpha-mask,
+    ---        (which simply involves blending it onto a white background, then inverting the result),
+    ---        and colorBlit it a dim gray onto the target bb.
+    ---        This would require the *original* transparent icon, not the flattened one in the cache.
+    ---        c.f., https://github.com/koreader/koreader/pull/6937#issuecomment-748372429 for a PoC
     if self.dim then
         bb:dimRect(x, y, size.w, size.h)
     end
-    -- If in night mode, invert all rendered images, so the original is
+    -- In night mode, invert all rendered images, so the original is
     -- displayed when the whole screen is inverted by night mode.
-    -- Except for our black & white icon files, that we do want inverted
-    -- in night mode.
-    if Screen.night_mode and not is_icon then
+    -- Except for our *black & white* icons: we do *NOT* want to invert them again:
+    -- they should match the UI's text/backgound.
+    --- @note: As for *color* icons, we really *ought* to invert them here,
+    ---        but we currently don't, as we don't really trickle down
+    ---        a way to discriminate them from the B&W ones.
+    ---        Currently, this is *only* the KOReader icon in Help, AFAIK.
+    if Screen.night_mode and not self.is_icon then
         bb:invertRect(x, y, size.w, size.h)
     end
 end

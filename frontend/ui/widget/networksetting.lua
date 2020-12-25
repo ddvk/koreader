@@ -44,7 +44,7 @@ local FrameContainer = require("ui/widget/container/framecontainer")
 local GestureRange = require("ui/gesturerange")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
-local ImageWidget = require("ui/widget/imagewidget")
+local IconWidget = require("ui/widget/iconwidget")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local InputDialog = require("ui/widget/inputdialog")
@@ -103,6 +103,7 @@ function MinimalPaginator:setProgress(progress) self.progress = progress end
 local NetworkItem = InputContainer:new{
     dimen = nil,
     height = Screen:scaleBySize(44),
+    icon_size = Screen:scaleBySize(32),
     width = nil,
     info = nil,
     background = Blitbuffer.COLOR_WHITE,
@@ -114,19 +115,26 @@ function NetworkItem:init()
         self.info.ssid = "[hidden]"
     end
 
-    local wifi_icon_path
+    local wifi_icon
     if string.find(self.info.flags, "WPA") then
-        wifi_icon_path = "resources/icons/koicon.wifi.secure.%d.medium.png"
+        wifi_icon = "wifi.secure.%d"
     else
-        wifi_icon_path = "resources/icons/koicon.wifi.open.%d.medium.png"
+        wifi_icon = "wifi.open.%d"
     end
-    if self.info.signal_quality == 0 or self.info.signal_quality == 100 then
-        wifi_icon_path = string.format(wifi_icon_path, self.info.signal_quality)
+    -- Based on NetworkManager's nmc_wifi_strength_bars
+    -- c.f., https://github.com/NetworkManager/NetworkManager/blob/2fa8ef9fb9c7fe0cc2d9523eed6c5a3749b05175/clients/common/nm-client-utils.c#L585-L612
+    if self.info.signal_quality > 80 then
+        wifi_icon = string.format(wifi_icon, 100)
+    elseif self.info.signal_quality > 55 then
+        wifi_icon = string.format(wifi_icon, 75)
+    elseif self.info.signal_quality > 30 then
+        wifi_icon = string.format(wifi_icon, 50)
+    elseif self.info.signal_quality > 5 then
+        wifi_icon = string.format(wifi_icon, 25)
     else
-        wifi_icon_path = string.format(
-            wifi_icon_path,
-            self.info.signal_quality + 25 - self.info.signal_quality % 25)
+        wifi_icon = string.format(wifi_icon, 0)
     end
+
     local horizontal_space = HorizontalSpan:new{width = Size.span.horizontal_default}
     self.content_container = OverlapGroup:new{
         dimen = self.dimen:copy(),
@@ -134,9 +142,10 @@ function NetworkItem:init()
             dimen = self.dimen:copy(),
             HorizontalGroup:new{
                 horizontal_space,
-                ImageWidget:new{
-                    alpha = true,
-                    file = wifi_icon_path,
+                IconWidget:new{
+                    icon = wifi_icon,
+                    width = self.icon_size,
+                    height = self.icon_size,
                 },
                 horizontal_space,
                 TextWidget:new{

@@ -22,17 +22,20 @@ local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
-local ImageWidget = require("ui/widget/imagewidget")
+local IconWidget = require("ui/widget/iconwidget")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local Size = require("ui/size")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local _ = require("gettext")
+local Screen = Device.screen
 
 local Button = InputContainer:new{
     text = nil, -- mandatory
     text_func = nil,
     icon = nil,
+    icon_width = Screen:scaleBySize(DGENERIC_ICON_SIZE), -- our icons are square
+    icon_height = Screen:scaleBySize(DGENERIC_ICON_SIZE),
     icon_rotation_angle = 0,
     preselect = false,
     callback = nil,
@@ -41,7 +44,7 @@ local Button = InputContainer:new{
     margin = 0,
     bordersize = Size.border.button,
     background = Blitbuffer.COLOR_WHITE,
-    radius = Size.radius.button,
+    radius = nil,
     padding = Size.padding.button,
     padding_h = nil,
     padding_v = nil,
@@ -74,11 +77,12 @@ function Button:init()
             face = Font:getFace(self.text_font_face, self.text_font_size)
         }
     else
-        self.label_widget = ImageWidget:new{
-            file = self.icon,
+        self.label_widget = IconWidget:new{
+            icon = self.icon,
             rotation_angle = self.icon_rotation_angle,
             dim = not self.enabled,
-            scale_for_dpi = true,
+            width = self.icon_width,
+            height = self.icon_height,
         }
     end
     local widget_size = self.label_widget:getSize()
@@ -229,6 +233,11 @@ function Button:onTapSelectButton()
             --       c.f., #4554 & #4541
             -- NOTE: self[1] -> self.frame, if you're confused about what this does vs. onFocus/onUnfocus ;).
             if self.text then
+                -- We only want the button's *highlight* to have rounded corners (otherwise they're redundant, same color as the bg).
+                -- The nil check is to discriminate the default from callers that explicitly request a specific radius.
+                if self[1].radius == nil then
+                    self[1].radius = Size.radius.button
+                end
                 UIManager:widgetRepaint(self[1], self[1].dimen.x, self[1].dimen.y)
             end
             UIManager:setDirty(nil, function()
@@ -241,11 +250,13 @@ function Button:onTapSelectButton()
                     -- widget no more there (destroyed, re-init'ed by setText(), or not inverted: nothing to invert back
                     return
                 end
+
                 self[1].invert = false
-                UIManager:widgetRepaint(self[1], self[1].dimen.x, self[1].dimen.y)
-                if self.text then
-                    UIManager:widgetRepaint(self[1], self[1].dimen.x, self[1].dimen.y)
+                -- Since we kill the corners, we only need a single repaint.
+                if self[1].radius == Size.radius.button then
+                    self[1].radius = nil
                 end
+                UIManager:widgetRepaint(self[1], self[1].dimen.x, self[1].dimen.y)
                 UIManager:setDirty(nil, function()
                     return "fast", self[1].dimen
                 end)

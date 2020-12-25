@@ -220,15 +220,15 @@ function util.secondsToHClock(seconds, withoutSeconds, hmsFormat)
     end
 end
 
---- Converts timestamp to an hour string
----- @int seconds number of seconds
----- @bool twelve_hour_clock
----- @treturn string hour string
---- @note: The MS CRT doesn't support either %l & %k, or the - format modifier (as they're not technically C99 or POSIX).
----        They are otherwise supported on Linux, BSD & Bionic, so, just special-case Windows...
----        We *could* arguably feed the os.date output to gsub("^0(%d)(.*)$", "%1%2"), but, while unlikely,
----        it's conceivable that a translator would put something other that the hour at the front of the string ;).
 if jit.os == "Windows" then
+    --- Converts timestamp to an hour string
+    ---- @int seconds number of seconds
+    ---- @bool twelve_hour_clock
+    ---- @treturn string hour string
+    ---- @note: The MS CRT doesn't support either %l & %k, or the - format modifier (as they're not technically C99 or POSIX).
+    ----        They are otherwise supported on Linux, BSD & Bionic, so, just special-case Windows...
+    ----        We *could* arguably feed the os.date output to gsub("^0(%d)(.*)$", "%1%2"), but, while unlikely,
+    ----        it's conceivable that a translator would put something other that the hour at the front of the string ;).
     function util.secondsToHour(seconds, twelve_hour_clock)
         if twelve_hour_clock then
             if os.date("%p", seconds) == "AM" then
@@ -810,11 +810,11 @@ end
 --- If the given path has a trailing /, returns the entire path as the directory
 --- path and "" as the file name.
 ---- @string file
----- @treturn string path, filename
+---- @treturn string directory, filename
 function util.splitFilePathName(file)
     if file == nil or file == "" then return "", "" end
     if string.find(file, "/") == nil then return "", file end
-    return string.gsub(file, "(.*/)(.*)", "%1"), string.gsub(file, ".*/", "")
+    return file:match("(.*/)(.*)")
 end
 
 --- Splits a file name into its pure file name and suffix
@@ -823,7 +823,7 @@ end
 function util.splitFileNameSuffix(file)
     if file == nil or file == "" then return "", "" end
     if string.find(file, "%.") == nil then return file, "" end
-    return string.gsub(file, "(.*)%.(.*)", "%1"), string.gsub(file, ".*%.", "")
+    return file:match("(.*)%.(.*)")
 end
 
 --- Gets file extension
@@ -835,7 +835,7 @@ function util.getFileNameSuffix(file)
 end
 
 --- Companion helper function that returns the script's language,
---- based on the filme extension.
+--- based on the file extension.
 ---- @string filename
 ---- @treturn string (lowercase) (or nil if not Device:canExecuteScript(file))
 function util.getScriptType(file)
@@ -1002,7 +1002,7 @@ This may fail on complex HTML (with styles, scripts, comments), but should be fi
 function util.htmlToPlainText(text)
     -- Replace <br> and <p> with \n
     text = text:gsub("%s*<%s*br%s*/?>%s*", "\n") -- <br> and <br/>
-    text = text:gsub("%s*<%s*p%s*>%s*", "\n") -- <p>
+    text = text:gsub("%s*<%s*p%s*>%s*", "\n&nbsp;&nbsp;&nbsp;&nbsp;") -- <p>
     text = text:gsub("%s*</%s*p%s*>%s*", "\n") -- </p>
     text = text:gsub("%s*<%s*p%s*/>%s*", "\n") -- standalone <p/>
     -- Remove all HTML tags
@@ -1012,6 +1012,8 @@ function util.htmlToPlainText(text)
     -- Trim spaces and new lines at start and end
     text = text:gsub("^[\n%s]*", "")
     text = text:gsub("[\n%s]*$", "")
+    -- Trim non-breaking spaces from the start
+    text = text:gsub("^\xC2\xA0\xC2\xA0\xC2\xA0\xC2\xA0", "")
     return text
 end
 

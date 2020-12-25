@@ -91,7 +91,7 @@ function OPDSBrowser:init()
           },
           {
              title = "ManyBooks",
-             url = "https://manybooks.net/opds/index.php",
+             url = "http://manybooks.net/opds/index.php",
           },
           {
              title = "Internet Archive",
@@ -99,11 +99,11 @@ function OPDSBrowser:init()
           },
           {
              title = "Flibusta (Russian)",
-             url = "https://www.flibusta.is/opds",
+             url = "http://www.flibusta.is/opds",
           },
           {
              title = "Flibusta [Ru] [Searchable]",
-             url = "https://www.flibusta.is/opds/search?searchTerm=%s",
+             url = "http://www.flibusta.is/opds/search?searchTerm=%s",
              searchable = true,
           },
           {
@@ -125,6 +125,7 @@ function OPDSBrowser:init()
         servers[4].url = "https://bookserver.archive.org"
     end
     self.item_table = self:genItemTableFromRoot()
+    self.catalog_title = nil
     Menu.init(self) -- call parent's init()
 end
 
@@ -341,6 +342,11 @@ function OPDSBrowser:fetchFeed(item_url, username, password, method)
         UIManager:show(InfoMessage:new{
             text = T(_("The catalog has been permanently moved. Please update catalog URL to '%1'."), BD.url(headers['Location'])),
         })
+    elseif code == 302 and item_url:match("^https") and headers.location:match("^http[^s]") then
+        UIManager:show(InfoMessage:new{
+            text = T(_("Insecure HTTPS → HTTP downgrade attempted by redirect from:\n\n'%1'\n\nto\n\n'%2'.\n\nPlease inform the server administrator that many clients disallow this because it could be a downgrade attack."), BD.url(item_url), BD.url(headers.location)),
+            icon = "notice-warning",
+        })
     elseif code == 401 then
         UIManager:show(InfoMessage:new{
             text = T(_("Authentication required for catalog. Please add a username and password.")),
@@ -520,7 +526,7 @@ end
 function OPDSBrowser:updateCatalog(item_url, username, password)
     local menu_table = self:genItemTableFromURL(item_url, username, password)
     if #menu_table > 0 then
-        self:switchItemTable(nil, menu_table)
+        self:switchItemTable(self.catalog_title, menu_table)
         if self.page_num <= 1 then
             self:onNext()
         end
@@ -536,7 +542,7 @@ function OPDSBrowser:appendCatalog(item_url, username, password)
         table.insert(self.item_table, item)
     end
     self.item_table.hrefs = new_table.hrefs
-    self:switchItemTable(nil, self.item_table, -1)
+    self:switchItemTable(self.catalog_title, self.item_table, -1)
     return true
 end
 
@@ -558,10 +564,10 @@ function OPDSBrowser:downloadFile(item, format, remote_url)
             local parsed = url.parse(remote_url)
             http.TIMEOUT = 20
 
-            local dummy, c = nil
+            local dummy, code, headers
 
             if parsed.scheme == "http" then
-                dummy, c = http.request {
+                dummy, code, headers = http.request {
                     url         = remote_url,
                     sink        = ltn12.sink.file(io.open(local_path, "w")),
                     user        = item.username,
@@ -570,7 +576,7 @@ function OPDSBrowser:downloadFile(item, format, remote_url)
             elseif parsed.scheme == "https" then
                 local auth = (item.username and item.password) and string.format("%s:%s", item.username, item.password) or nil
                 local hostname = parsed.host
-                dummy, c = http.request {
+                dummy, code, headers = http.request {
                     url         = remote_url,
                     headers     = auth and { Authorization = "Basic " .. mime.b64(auth), ["Host"] = hostname } or nil,
                     sink        = ltn12.sink.file(io.open(local_path, "w")),
@@ -582,12 +588,19 @@ function OPDSBrowser:downloadFile(item, format, remote_url)
                 })
             end
 
-            if c == 200 then
+            if code == 200 then
                 logger.dbg("file downloaded to", local_path)
                 if self.file_downloaded_callback then
                     self.file_downloaded_callback(local_path)
                 end
+            elseif code == 302 and remote_url:match("^https") and headers.location:match("^http[^s]") then
+                util.removeFile(local_path)
+                UIManager:show(InfoMessage:new{
+                    text = T(_("Insecure HTTPS → HTTP downgrade attempted by redirect from:\n\n'%1'\n\nto\n\n'%2'.\n\nPlease inform the server administrator that many clients disallow this because it could be a downgrade attack."), BD.url(remote_url), BD.url(headers.location)),
+                    icon = "notice-warning",
+                })
             else
+                util.removeFile(local_path)
                 UIManager:show(InfoMessage:new {
                     text = _("Could not save file to:\n") .. BD.filepath(local_path),
                     timeout = 3,
@@ -680,6 +693,7 @@ function OPDSBrowser:browse(browse_url, username, password)
         url = browse_url,
         username = username,
         password = password,
+        title = self.catalog_title,
     })
     if not self:updateCatalog(browse_url, username, password) then
         table.remove(self.paths)
@@ -721,6 +735,7 @@ function OPDSBrowser:browseSearchable(browse_url, username, password)
 end
 
 function OPDSBrowser:onMenuSelect(item)
+    self.catalog_title = item.text or _("OPDS Catalog")
     -- add catalog
     if item.callback then
         item.callback()
@@ -862,6 +877,7 @@ function OPDSBrowser:onReturn()
         local path = self.paths[#self.paths]
         if path then
             -- return to last path
+            self.catalog_title = path.title
             self:updateCatalog(path.url, path.username, path.password)
         else
             -- return to root path, we simply reinit opdsbrowser
